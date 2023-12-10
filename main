@@ -221,7 +221,5 @@ if isinstance(result, tuple):
 else:
     print(result)
 
-print(ball_coordinates_over_time)
-
 # 調用函數進行可視化
 visualize_trajectory(ball_coordinates_over_time, final_land_point)
