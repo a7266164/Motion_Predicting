@@ -1,0 +1,172 @@
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import os
+import re
+import math
+
+#-----------------------------------------主函數-----------------------------------------#
+
+def process_folder(folder_path):
+    files = sort_files(folder_path)
+    pairs = find_pairs(files)
+    all_coordinates = []
+
+    # 內部參數
+    focal_length_mm = 6.3
+    sensor_size_mm = np.array([5.7, 4.29])
+    image_resolution_px = np.array([640, 480])
+
+    # 外部參數
+    baseline_cm = 70
+
+    # 計算焦距（從毫米轉換為像素）
+    focal_length_px = focal_length_mm * (image_resolution_px / sensor_size_mm)
+
+    # 成對計算黃色球體的三維座標
+    for left_file, right_file in pairs:
+        left_image_path = os.path.join(folder_path, left_file)
+        right_image_path = os.path.join(folder_path, right_file)
+        
+        ball_center_left, ball_center_right = find_yellow_ball_center(left_image_path, right_image_path)
+
+        disparity = ball_center_left[0] - ball_center_right[0]
+        depth_cm = (focal_length_px[0] * baseline_cm) / disparity
+        cx, cy = image_resolution_px / 2
+        X = ((ball_center_left[0] - cx) * depth_cm) / focal_length_px[0]
+        Y_revised = ((cy - ball_center_left[1]) * depth_cm) / focal_length_px[1]
+        Z = depth_cm
+
+        ball_coordinates = (round(X - 35, 3), round(Z, 3), round(Y_revised + 110, 3))
+        all_coordinates.append(ball_coordinates)
+
+    return all_coordinates
+
+def predict_motion(ball_coordinates_over_time, time_interval):
+    # 確保座標列表中至少有兩個點
+    if len(ball_coordinates_over_time) < 2:
+        return "無法計算，需要至少兩個座標點"
+
+    # 取出最後兩點
+    last_point_cm = ball_coordinates_over_time[-1]
+    second_last_point_cm = ball_coordinates_over_time[-2]
+
+    # 公分換算成公尺
+    last_point_m = tuple(coordinate * 0.01 for coordinate in last_point_cm)
+    second_last_point_m = tuple(coordinate * 0.01 for coordinate in second_last_point_cm)
+
+    # 給定的值
+    Voz = (last_point_m[2] - second_last_point_m[2]) / time_interval  # Z軸的初速度
+    Vx = (last_point_m[0] - second_last_point_m[0]) / time_interval  # X軸的速度
+    Vy = (last_point_m[1] - second_last_point_m[1]) / time_interval  # Y軸的速度
+    Az = -9.8  # Z軸的加速度（m/s²）
+    s = last_point_m[2]  # 最後一個位置到地面的距離（m）
+
+    # 二次方程的係數
+    a = 0.5 * Az
+    b = Voz
+    c = s
+
+    # 計算判別式
+    discriminant = b**2 - 4*a*c
+
+    # 計算落地時間
+    if discriminant >= 0:
+        t1 = (-b + math.sqrt(discriminant)) / (2*a)
+        t2 = (-b - math.sqrt(discriminant)) / (2*a)
+        time_to_land = max(t1, t2)
+    else:
+        return "無法計算落地時間（因為判別式為負）"
+
+    # 計算末速度
+    if isinstance(time_to_land, float):
+        Vfz = Voz + Az * time_to_land
+        final_velocity = (round(Vx, 3), round(Vy, 3), round(Vfz, 3))
+    else:
+        return "無法計算末速度，因為無法確定落地時間"
+
+    # 計算最終落點
+    final_land_point = (round(last_point_m[0] + Vx * time_to_land, 3), round(last_point_m[1] + Vy * time_to_land, 3), 0)
+
+    return final_land_point, final_velocity
+
+#-----------------------------------------子函數-----------------------------------------#
+
+def get_time_from_filename(filename):
+    """ 從檔案名稱中提取時間 """
+    time_match = re.search(r'(\d+ \d+)', filename)
+    return time_match.group(0) if time_match else None
+
+def sort_files(folder_path):
+    """ 根據時間對檔案進行排序 """
+    files = os.listdir(folder_path)
+    files.sort(key=get_time_from_filename)
+    return files
+
+def find_pairs(files):
+    """ 在檔案列表中找到成對的左右影像 """
+    pairs = []
+    for file in files:
+        if '_L_' in file:
+            time = get_time_from_filename(file)
+            right_file = file.replace('_L_', '_R_')
+            if right_file in files:
+                pairs.append((file, right_file))
+    return pairs
+
+# 找黃球
+def find_yellow_ball_center(left_image_path, right_image_path):
+    # 讀取左右攝影機影像
+    left_image = cv2.imread(left_image_path)
+    right_image = cv2.imread(right_image_path)
+    
+    # Convert images to RGB
+    img_left = cv2.cvtColor(left_image, cv2.COLOR_BGR2RGB)
+    img_right = cv2.cvtColor(right_image, cv2.COLOR_BGR2RGB)
+
+    # Convert images to HSV for better color segmentation
+    hsv_left = cv2.cvtColor(img_left, cv2.COLOR_RGB2HSV)
+    hsv_right = cv2.cvtColor(img_right, cv2.COLOR_RGB2HSV)
+
+    # Define the range of yellow color in HSV
+    lower_yellow = np.array([20, 100, 100])
+    upper_yellow = np.array([30, 255, 255])
+
+    # Threshold the HSV images to get only yellow colors
+    mask_left = cv2.inRange(hsv_left, lower_yellow, upper_yellow)
+    mask_right = cv2.inRange(hsv_right, lower_yellow, upper_yellow)
+
+    # Find contours of the yellow ball
+    contours_left, _ = cv2.findContours(mask_left, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    contours_right, _ = cv2.findContours(mask_right, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Assuming the largest contour in the image is the yellow ball
+    ball_contour_left = max(contours_left, key=cv2.contourArea)
+    ball_contour_right = max(contours_right, key=cv2.contourArea)
+
+    # Calculate the centroid of the ball
+    M_left = cv2.moments(ball_contour_left)
+    M_right = cv2.moments(ball_contour_right)
+
+    # Calculate the x,y coordinate of the center
+    ball_center_left = (int(M_left["m10"] / M_left["m00"]), int(M_left["m01"] / M_left["m00"]))
+    ball_center_right = (int(M_right["m10"] / M_right["m00"]), int(M_right["m01"] / M_right["m00"]))
+
+    return ball_center_left, ball_center_right
+
+#-----------------------------------------主程式-----------------------------------------#
+
+folder_path = 'C:/Users/a1234/Desktop/Python/Motion_Predicting/TAKE_1'
+
+ball_coordinates_over_time = process_folder(folder_path)
+
+time_interval = 0.2  # 每幀時間間隔
+result = predict_motion(ball_coordinates_over_time, time_interval)
+
+if isinstance(result, tuple):
+    final_land_point, final_velocity = result
+    print(f"Predicted final landing point: {final_land_point} m")
+    print(f"Predicted final velocity: {final_velocity} m/s")
+else:
+    print(result)
