@@ -6,8 +6,10 @@ import os
 import re
 import math
 
+
 #-----------------------------------------主函數-----------------------------------------#
 
+# 處理資料夾中的影像
 def process_folder(folder_path):
     files = sort_files(folder_path)
     pairs = find_pairs(files)
@@ -43,6 +45,7 @@ def process_folder(folder_path):
 
     return all_coordinates
 
+# 預測運動軌跡
 def predict_motion(ball_coordinates_over_time, time_interval):
     # 確保座標列表中至少有兩個點
     if len(ball_coordinates_over_time) < 2:
@@ -90,6 +93,53 @@ def predict_motion(ball_coordinates_over_time, time_interval):
     final_land_point = (round(last_point_m[0] + Vx * time_to_land, 3), round(last_point_m[1] + Vy * time_to_land, 3), 0)
 
     return final_land_point, final_velocity
+
+# 運動軌跡可視化
+def visualize_trajectory(coordinates, final_land_point):
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    # 解包座標
+    xs, ys, zs = zip(*coordinates)
+
+    # 繪製運動軌跡
+    ax.plot(xs, ys, zs, marker='o', label='Ball Trajectory')
+
+    # 將 final_land_point 從公尺轉換為公分
+    final_land_point_cm = tuple(coordinate * 100 for coordinate in final_land_point)
+
+    # 攝影機位置
+    camera_positions = [(-35, 0, 110), (35, 0, 110)]
+    for camera_pos in camera_positions:
+        ax.scatter(*camera_pos, color='red', marker='^', s=100)
+
+    # 繪製預測的落點
+    ax.scatter(*final_land_point_cm, color='green', marker='X', s=100, label='Predicted Landing Point')
+
+    # 獲取最後一個實際點的座標
+    last_real_point = coordinates[-1]
+
+    # 將最後一個點和預測落點連接
+    ax.plot([last_real_point[0], final_land_point_cm[0]], 
+            [last_real_point[1], final_land_point_cm[1]], 
+            [last_real_point[2], final_land_point_cm[2]], 
+            color='green', linestyle='--')
+
+    # 設置軸範圍
+    ax.set_xlim([-50, 50])
+    ax.set_ylim([0, 700])
+    ax.set_zlim([0, 200])
+
+    # 設置軸標籤
+    ax.set_xlabel('X Axis')
+    ax.set_ylabel('Y Axis')
+    ax.set_zlabel('Z Axis')
+
+    # 顯示圖例
+    ax.legend()
+
+    # 顯示圖表
+    plt.show()
 
 #-----------------------------------------子函數-----------------------------------------#
 
@@ -161,7 +211,7 @@ folder_path = 'C:/Users/a1234/Desktop/Python/Motion_Predicting/TAKE_1'
 
 ball_coordinates_over_time = process_folder(folder_path)
 
-time_interval = 0.2  # 每幀時間間隔
+time_interval = 0.04  # 每幀時間間隔
 result = predict_motion(ball_coordinates_over_time, time_interval)
 
 if isinstance(result, tuple):
@@ -170,3 +220,8 @@ if isinstance(result, tuple):
     print(f"Predicted final velocity: {final_velocity} m/s")
 else:
     print(result)
+
+print(ball_coordinates_over_time)
+
+# 調用函數進行可視化
+visualize_trajectory(ball_coordinates_over_time, final_land_point)
